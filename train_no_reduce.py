@@ -13,7 +13,6 @@ import torch.cuda
 from datasets import load_dataset
 
 import transformers
-from transformer_smaller_training_vocab import reduce_train_vocab, get_texts_from_dataset
 from transformers import (
     AutoConfig,
     AutoModelForSequenceClassification,
@@ -209,75 +208,73 @@ def main():
             result["label"] = [(label_to_id[label] if label != -1 else -1) for label in examples["label"]]
         return result
 
-    with reduce_train_vocab(model=model, tokenizer=tokenizer, texts=get_texts_from_dataset(raw_datasets, key=(
-            sentence1_key, sentence2_key) if sentence2_key is not None else sentence1_key
-                                                                                           )):
-        param_count = sum(param.numel() for param in model.parameters())
-        vocab_count = model.get_input_embeddings().weight.size(0)
-        with training_args.main_process_first(desc="dataset map pre-processing"):
-            raw_datasets = raw_datasets.map(
-                preprocess_function,
-                batched=True,
-                load_from_cache_file=False,
-                desc="Running tokenizer on dataset",
-            )
-        train_dataset = raw_datasets["train"]
-        eval_dataset = raw_datasets["validation_matched" if data_args.task_name == "mnli" else "validation"]
-        metric = evaluate.load("glue", data_args.task_name)
+    param_count = sum(param.numel() for param in model.parameters())
+    vocab_count = model.get_input_embeddings().weight.size(0)
 
-        # You can define your custom compute_metrics function. It takes an `EvalPrediction` object (a namedtuple with a
-        # predictions and label_ids field) and has to return a dictionary string to float.
-        def compute_metrics(p: EvalPrediction):
-            preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
-            preds = np.squeeze(preds) if is_regression else np.argmax(preds, axis=1)
-            result = metric.compute(predictions=preds, references=p.label_ids)
-            if len(result) > 1:
-                result["combined_score"] = np.mean(list(result.values())).item()
-            result["peak_memory"] = torch.cuda.max_memory_allocated()
-            return result
-
-        if data_args.pad_to_max_length:
-            data_collator = default_data_collator
-        elif training_args.fp16:
-            data_collator = DataCollatorWithPadding(tokenizer, pad_to_multiple_of=8)
-        else:
-            data_collator = None
-
-        # Initialize our Trainer
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset if training_args.do_train else None,
-            eval_dataset=eval_dataset if training_args.do_eval else None,
-            compute_metrics=compute_metrics,
-            tokenizer=tokenizer,
-            data_collator=data_collator,
+    with training_args.main_process_first(desc="dataset map pre-processing"):
+        raw_datasets = raw_datasets.map(
+            preprocess_function,
+            batched=True,
+            load_from_cache_file=False,
+            desc="Running tokenizer on dataset",
         )
+    train_dataset = raw_datasets["train"]
+    eval_dataset = raw_datasets["validation_matched" if data_args.task_name == "mnli" else "validation"]
+    metric = evaluate.load("glue", data_args.task_name)
 
-        # Training
-        train_result = trainer.train(resume_from_checkpoint=None)
-        metrics = train_result.metrics
-        trainer.log_metrics("train", metrics)
+    # You can define your custom compute_metrics function. It takes an `EvalPrediction` object (a namedtuple with a
+    # predictions and label_ids field) and has to return a dictionary string to float.
+    def compute_metrics(p: EvalPrediction):
+        preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
+        preds = np.squeeze(preds) if is_regression else np.argmax(preds, axis=1)
+        result = metric.compute(predictions=preds, references=p.label_ids)
+        if len(result) > 1:
+            result["combined_score"] = np.mean(list(result.values())).item()
+        result["peak_memory"] = torch.cuda.max_memory_allocated()
+        return result
 
-        logger.info("*** Evaluate ***")
+    if data_args.pad_to_max_length:
+        data_collator = default_data_collator
+    elif training_args.fp16:
+        data_collator = DataCollatorWithPadding(tokenizer, pad_to_multiple_of=8)
+    else:
+        data_collator = None
 
-        tasks = [data_args.task_name]
-        eval_datasets = [eval_dataset]
-        if data_args.task_name == "mnli":
-            tasks.append("mnli-mm")
-            valid_mm_dataset = raw_datasets["validation_mismatched"]
-            eval_datasets.append(valid_mm_dataset)
-        combined = {"param_count": param_count, "vocab_count": vocab_count}
+    # Initialize our Trainer
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset if training_args.do_train else None,
+        eval_dataset=eval_dataset if training_args.do_eval else None,
+        compute_metrics=compute_metrics,
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+    )
 
-        for eval_dataset, task in zip(eval_datasets, tasks):
-            metrics = trainer.evaluate(eval_dataset=eval_dataset)
+    # Training
+    train_result = trainer.train(resume_from_checkpoint=None)
+    metrics = train_result.metrics
+    trainer.log_metrics("train", metrics)
 
-            if task == "mnli-mm":
-                metrics = {k + "_mm": v for k, v in metrics.items()}
-            if task is not None:
-                combined.update(metrics)
+    logger.info("*** Evaluate ***")
 
-    with open(f"{data_args.task_name}-{model_args.model_name_or_path}-reduced.json", "w+", encoding="utf-8") as f:
+    tasks = [data_args.task_name]
+    eval_datasets = [eval_dataset]
+    if data_args.task_name == "mnli":
+        tasks.append("mnli-mm")
+        valid_mm_dataset = raw_datasets["validation_mismatched"]
+        eval_datasets.append(valid_mm_dataset)
+    combined = {"param_count": param_count, "vocab_count": vocab_count}
+
+    for eval_dataset, task in zip(eval_datasets, tasks):
+        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+
+        if task == "mnli-mm":
+            metrics = {k + "_mm": v for k, v in metrics.items()}
+        if task is not None:
+            combined.update(metrics)
+
+    with open(f"{data_args.task_name}-{model_args.model_name_or_path}.json", "w+", encoding="utf-8") as f:
         json.dump(combined, f, indent=4)
     shutil.rmtree(training_args.output_dir)
 
