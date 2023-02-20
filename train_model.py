@@ -42,13 +42,11 @@ from transformers import (
     default_data_collator,
     set_seed,
 )
-from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.27.0.dev0")
+check_min_version("4.26.0.dev0")
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
 
@@ -157,7 +155,7 @@ class DataTrainingArguments:
             assert train_extension in ["csv", "json"], "`train_file` should be a csv or a json file."
             validation_extension = self.validation_file.split(".")[-1]
             assert (
-                validation_extension == train_extension
+                    validation_extension == train_extension
             ), "`validation_file` should have the same extension (csv or json) as `train_file`."
 
 
@@ -252,12 +250,12 @@ def main():
         cache_dir=model_args.cache_dir,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-      is_regression = data_args.task_name == "stsb"
-      if not is_regression:
-          label_list = raw_datasets["train"].features["label"].names
-          num_labels = len(label_list)
-      else:
-          num_labels = 1
+    is_regression = data_args.task_name == "stsb"
+    if not is_regression:
+        label_list = raw_datasets["train"].features["label"].names
+        num_labels = len(label_list)
+    else:
+        num_labels = 1
 
     # Load pretrained model and tokenizer
     #
@@ -300,9 +298,9 @@ def main():
     # Some models have set the order of the labels to use, so let's make sure we do use it.
     label_to_id = None
     if (
-        model.config.label2id != PretrainedConfig(num_labels=num_labels).label2id
-        and data_args.task_name is not None
-        and not is_regression
+            model.config.label2id != PretrainedConfig(num_labels=num_labels).label2id
+            and data_args.task_name is not None
+            and not is_regression
     ):
         # Some have all caps in their config, some don't.
         label_name_to_id = {k.lower(): v for k, v in model.config.label2id.items()}
@@ -424,7 +422,7 @@ def main():
     trainer.log_metrics("train", metrics)
     trainer.save_metrics("train", metrics)
     trainer.save_state()
-    
+
     logger.info("*** Evaluate ***")
 
     # Loop to handle MNLI double evaluation (matched, mis-matched)
@@ -439,49 +437,51 @@ def main():
         eval_datasets.append(valid_mm_dataset)
         combined = {}
 
-    for eval_dataset, task in zip(eval_datasets, tasks):
-        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        for eval_dataset, task in zip(eval_datasets, tasks):
+            metrics = trainer.evaluate(eval_dataset=eval_dataset)
 
-        max_eval_samples = (
-            data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-        )
-        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
+            max_eval_samples = (
+                data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
+            )
+            metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
 
-        if task == "mnli-mm":
-            metrics = {k + "_mm": v for k, v in metrics.items()}
-        if task is not None and "mnli" in task:
-            combined.update(metrics)
+            if task == "mnli-mm":
+                metrics = {k + "_mm": v for k, v in metrics.items()}
+            if task is not None and "mnli" in task:
+                combined.update(metrics)
 
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", combined if task is not None and "mnli" in task else metrics)
+            trainer.log_metrics("eval", metrics)
+            trainer.save_metrics("eval", combined if task is not None and "mnli" in task else metrics)
 
-      logger.info("*** Predict ***")
+    logger.info("*** Predict ***")
 
-      # Loop to handle MNLI double evaluation (matched, mis-matched)
-      tasks = [data_args.task_name]
-      predict_datasets = [predict_dataset]
-      if data_args.task_name == "mnli":
-          tasks.append("mnli-mm")
-          predict_datasets.append(raw_datasets["test_mismatched"])
+    # Loop to handle MNLI double evaluation (matched, mis-matched)
+    tasks = [data_args.task_name]
+    predict_datasets = [predict_dataset]
+    if data_args.task_name == "mnli":
+        tasks.append("mnli-mm")
+        predict_datasets.append(raw_datasets["test_mismatched"])
 
-      for predict_dataset, task in zip(predict_datasets, tasks):
-          # Removing the `label` columns because it contains -1 and Trainer won't like that.
-          predict_dataset = predict_dataset.remove_columns("label")
-          predictions = trainer.predict(predict_dataset, metric_key_prefix="predict").predictions
-          predictions = np.squeeze(predictions) if is_regression else np.argmax(predictions, axis=1)
+    for predict_dataset, task in zip(predict_datasets, tasks):
+        # Removing the `label` columns because it contains -1 and Trainer won't like that.
+        predict_dataset = predict_dataset.remove_columns("label")
+        predictions = trainer.predict(predict_dataset, metric_key_prefix="predict").predictions
+        predictions = np.squeeze(predictions) if is_regression else np.argmax(predictions, axis=1)
 
-          output_predict_file = os.path.join(training_args.output_dir, f"predict_results_{task}.txt")
-          if trainer.is_world_process_zero():
-              with open(output_predict_file, "w") as writer:
-                  logger.info(f"***** Predict results {task} *****")
-                  writer.write("index\tprediction\n")
-                  for index, item in enumerate(predictions):
-                      if is_regression:
-                          writer.write(f"{index}\t{item:3.3f}\n")
-                      else:
-                          item = label_list[item]
-                          writer.write(f"{index}\t{item}\n")
+        output_predict_file = os.path.join(training_args.output_dir, f"predict_results_{task}.txt")
+        if trainer.is_world_process_zero():
+            with open(output_predict_file, "w") as writer:
+                logger.info(f"***** Predict results {task} *****")
+                writer.write("index\tprediction\n")
+                for index, item in enumerate(predictions):
+                    if is_regression:
+                        writer.write(f"{index}\t{item:3.3f}\n")
+                    else:
+                        item = label_list[item]
+                        writer.write(f"{index}\t{item}\n")
 
 
 if __name__ == "__main__":
     main()
+
+#  python train_model.py --model_name_or_path bert-base-cased --task_name stsb --do_train --do_predict --max_seq_length 128 --per_device_train_batch_size 32 --learning_rate 2e-5 --num_train_epochs 3 --output_dir sts_b
